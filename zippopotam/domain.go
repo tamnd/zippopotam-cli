@@ -2,7 +2,6 @@ package zippopotam
 
 import (
 	"context"
-	"net/url"
 	"strings"
 
 	"github.com/tamnd/any-cli/kit"
@@ -19,9 +18,6 @@ import (
 // zippopotam:// URIs by routing to the operations Register installs. The same
 // Domain also builds the standalone zippopotam binary (see cli.NewApp), so the
 // binary and a host share one source of truth.
-//
-// This is the scaffold's starting point: one resource type, "page", served by a
-// resolver op and a list op. Add your real types here as you model the site.
 func init() { kit.Register(Domain{}) }
 
 // Domain is the zippopotam driver. It carries no state; the per-run client is
@@ -33,39 +29,34 @@ type Domain struct{}
 func (Domain) Info() kit.DomainInfo {
 	return kit.DomainInfo{
 		Scheme: "zippopotam",
-		Hosts:  []string{Host},
+		Hosts:  []string{Host, WebHost},
 		Identity: kit.Identity{
 			Binary: "zippopotam",
-			Short:  "A command line for zippopotam.",
-			Long: `A command line for zippopotam.
+			Short:  "A command line for Zippopotam.us postal code lookups.",
+			Long: `A command line for Zippopotam.us postal code lookups.
 
-zippopotam reads public zippopotam data over plain HTTPS, shapes it into
+zippopotam reads public postal code data over plain HTTPS, shapes it into
 clean records, and prints output that pipes into the rest of your tools. No API
 key, nothing to run alongside it.`,
-			Site: Host,
+			Site: "https://" + WebHost,
 			Repo: "https://github.com/tamnd/zippopotam-cli",
 		},
 	}
 }
 
-// Register installs the client factory and every operation onto app. A resolver
-// op (Single) names its own record type and answers `ant get`; a List op
-// enumerates a parent resource's members and answers `ant ls`.
+// Register installs the client factory and every operation onto app.
+// The op emits *ZipCode, so kit derives the URI authority as "zipcode"
+// (strings.ToLower("ZipCode")).
 func (Domain) Register(app *kit.App) {
 	app.SetClient(newClient)
 
-	// Resolver op: one record per id, the home of `zippopotam page` and
-	// `ant get zippopotam://page/<id>`.
-	kit.Handle(app, kit.OpMeta{Name: "page", Group: "read", Single: true,
-		Summary: "Fetch a page by path or URL", URIType: "page", Resolver: true,
-		Args: []kit.Arg{{Name: "ref", Help: "page path or URL"}}}, getPage)
-
-	// List op: members of a page, the home of `zippopotam links` and `ant ls`.
-	// It emits page stubs, so every listed member is itself an addressable
-	// zippopotam://page/ URI a host can follow.
-	kit.Handle(app, kit.OpMeta{Name: "links", Group: "read", List: true,
-		Summary: "List the pages a page links to", URIType: "page",
-		Args: []kit.Arg{{Name: "ref", Help: "page path or URL"}}}, listLinks)
+	kit.Handle(app, kit.OpMeta{
+		Name:    "lookup",
+		Group:   "read",
+		Single:  true,
+		Summary: "Look up a postal code",
+		Args:    []kit.Arg{{Name: "postalcode", Help: "postal/zip code"}},
+	}, lookupOp)
 }
 
 // newClient builds the client from the host-resolved config, so a host and the
@@ -88,86 +79,81 @@ func newClient(_ context.Context, cfg kit.Config) (any, error) {
 }
 
 // --- inputs ---
-//
-// Each handler takes a typed input struct. kit fills the fields from the tags:
-// kit:"arg" is a positional argument, kit:"flag,inherit" binds the framework's
-// shared flag of the same name, and kit:"inject" receives the client newClient
-// builds.
 
-type pageRef struct {
-	Ref    string  `kit:"arg" help:"page path or URL"`
-	Client *Client `kit:"inject"`
-}
-
-type listRef struct {
-	Ref    string  `kit:"arg" help:"page path or URL"`
-	Limit  int     `kit:"flag,inherit" help:"max results"`
-	Client *Client `kit:"inject"`
+type lookupInput struct {
+	PostalCode string  `kit:"arg" help:"postal/zip code"`
+	Country    string  `kit:"flag" help:"country code (us, gb, de, fr, etc.)" default:"us"`
+	Client     *Client `kit:"inject"`
 }
 
 // --- handlers ---
 
-func getPage(ctx context.Context, in pageRef, emit func(*Page) error) error {
-	p, err := in.Client.GetPage(ctx, pagePath(in.Ref))
+func lookupOp(ctx context.Context, in lookupInput, emit func(*ZipCode) error) error {
+	z, err := in.Client.Lookup(ctx, in.Country, in.PostalCode)
 	if err != nil {
 		return mapErr(err)
 	}
-	return emit(p)
-}
-
-func listLinks(ctx context.Context, in listRef, emit func(*Page) error) error {
-	pages, err := in.Client.PageLinks(ctx, pagePath(in.Ref), in.Limit)
-	if err != nil {
-		return mapErr(err)
-	}
-	for _, p := range pages {
-		if err := emit(p); err != nil {
-			return err
-		}
-	}
-	return nil
+	return emit(z)
 }
 
 // --- Resolver: the URI-native string functions, pure and network-free ---
 
-// Classify turns any accepted input — a bare path or a full zippopotam.com URL —
-// into the canonical (type, id), so `ant resolve` and `ant url` touch no network.
+// Classify turns an accepted input — a bare postal code, an optional
+// "CC:postalcode" prefix form, or a full zippopotam URL — into (uriType, id).
+// The URI authority for ZipCode records is "zipcode" (kit derives it from the
+// struct name). The id is the bare postal code stored in ZipCode.PostCode.
 func (Domain) Classify(input string) (uriType, id string, err error) {
-	id = pagePath(input)
-	if id == "" {
-		return "", "", errs.Usage("unrecognized zippopotam reference: %q", input)
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", "", errs.Usage("empty input")
 	}
-	return "page", id, nil
+
+	// Full URL: https://api.zippopotam.us/us/90210 or https://www.zippopotam.us/us/90210
+	if strings.HasPrefix(input, "http://") || strings.HasPrefix(input, "https://") {
+		for _, h := range []string{Host, WebHost} {
+			for _, scheme := range []string{"https://", "http://"} {
+				prefix := scheme + h + "/"
+				if strings.HasPrefix(input, prefix) {
+					path := strings.Trim(strings.TrimPrefix(input, prefix), "/")
+					// path is "countrycode/postalcode"; extract the postal code
+					if path != "" {
+						parts := strings.SplitN(path, "/", 2)
+						if len(parts) == 2 && parts[1] != "" {
+							return "zipcode", parts[1], nil
+						}
+						// bare path with no slash — treat as postal code
+						return "zipcode", path, nil
+					}
+				}
+			}
+		}
+		return "", "", errs.Usage("unrecognized zippopotam URL: %q", input)
+	}
+
+	// "XX:postalcode" country-prefix form — strip the country prefix, return bare code
+	if idx := strings.Index(input, ":"); idx == 2 {
+		code := strings.TrimSpace(input[idx+1:])
+		if code != "" {
+			return "zipcode", code, nil
+		}
+	}
+
+	// bare postalcode
+	return "zipcode", input, nil
 }
 
-// Locate is the inverse: the live https URL for a (type, id).
+// Locate is the inverse: the live https URL for a (uriType, id).
+// id is the bare postal code. We link to the www homepage since the API
+// doesn't have a human-readable page per code.
 func (Domain) Locate(uriType, id string) (string, error) {
-	if uriType != "page" {
+	if uriType != "zipcode" {
 		return "", errs.Usage("zippopotam has no resource type %q", uriType)
 	}
-	return BaseURL + "/" + strings.Trim(id, "/"), nil
-}
-
-// --- helpers ---
-
-// pagePath turns any accepted input into the canonical page id: the path of a
-// full URL on this host, or a bare path with its slashes trimmed.
-func pagePath(input string) string {
-	input = strings.TrimSpace(input)
-	if u, err := url.Parse(input); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
-		return strings.Trim(u.Path, "/")
-	}
-	return strings.Trim(input, "/")
+	return "https://" + WebHost + "/" + strings.Trim(id, "/"), nil
 }
 
 // mapErr converts a library error into the kit error kind that carries the right
-// exit code, so a host renders the same outcomes the standalone binary does. As
-// you add sentinel errors to the library, map them here, for example:
-//
-//	case errors.Is(err, ErrNotFound):
-//		return errs.NotFound("%s", err.Error())
-//	case errors.Is(err, ErrRateLimited):
-//		return errs.RateLimited("%s", err.Error())
+// exit code, so a host renders the same outcomes the standalone binary does.
 func mapErr(err error) error {
 	return err
 }
