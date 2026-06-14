@@ -27,7 +27,7 @@ const sampleResponse = `{
 }`
 
 // prefixTransport rewrites the host+scheme of every outgoing request to the
-// test server, so Lookup (which builds its own full URL) hits the httptest
+// test server, so LookupAll (which builds its own full URL) hits the httptest
 // server instead of the real API.
 type prefixTransport struct {
 	scheme string
@@ -119,7 +119,7 @@ func TestGetRetriesOn503(t *testing.T) {
 	}
 }
 
-func TestLookup(t *testing.T) {
+func TestLookupAll(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/us/90210" {
 			t.Errorf("unexpected path %q", r.URL.Path)
@@ -132,37 +132,35 @@ func TestLookup(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv)
-	z, err := c.Lookup(context.Background(), "us", "90210")
+	places, err := c.LookupAll(context.Background(), "us", "90210")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if z.PostCode != "90210" {
-		t.Errorf("PostCode = %q, want 90210", z.PostCode)
+	if len(places) != 1 {
+		t.Fatalf("got %d places, want 1", len(places))
 	}
-	if z.PlaceName != "Beverly Hills" {
-		t.Errorf("PlaceName = %q, want Beverly Hills", z.PlaceName)
+	p := places[0]
+	if p.PostCode != "90210" {
+		t.Errorf("PostCode = %q, want 90210", p.PostCode)
 	}
-	if z.Country != "United States" {
-		t.Errorf("Country = %q, want United States", z.Country)
+	if p.PlaceName != "Beverly Hills" {
+		t.Errorf("PlaceName = %q, want Beverly Hills", p.PlaceName)
 	}
-	if z.CountryCode != "US" {
-		t.Errorf("CountryCode = %q, want US", z.CountryCode)
+	if p.Country != "United States" {
+		t.Errorf("Country = %q, want United States", p.Country)
 	}
-	if z.State != "California" {
-		t.Errorf("State = %q, want California", z.State)
+	if p.State != "California" {
+		t.Errorf("State = %q, want California", p.State)
 	}
-	if z.StateCode != "CA" {
-		t.Errorf("StateCode = %q, want CA", z.StateCode)
+	if p.Latitude != "34.0901" {
+		t.Errorf("Latitude = %q, want 34.0901", p.Latitude)
 	}
-	if z.Lat != "34.0901" {
-		t.Errorf("Lat = %q, want 34.0901", z.Lat)
-	}
-	if z.Lon != "-118.4065" {
-		t.Errorf("Lon = %q, want -118.4065", z.Lon)
+	if p.Longitude != "-118.4065" {
+		t.Errorf("Longitude = %q, want -118.4065", p.Longitude)
 	}
 }
 
-func TestLookupDefaultCountry(t *testing.T) {
+func TestLookupAllDefaultCountry(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/us/90210" {
 			t.Errorf("default country: unexpected path %q, want /us/90210", r.URL.Path)
@@ -173,16 +171,19 @@ func TestLookupDefaultCountry(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv)
-	z, err := c.Lookup(context.Background(), "", "90210")
+	places, err := c.LookupAll(context.Background(), "", "90210")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if z.CountryCode != "US" {
-		t.Errorf("CountryCode = %q, want US", z.CountryCode)
+	if len(places) == 0 {
+		t.Fatal("got 0 places, want at least 1")
+	}
+	if places[0].Country != "United States" {
+		t.Errorf("Country = %q, want United States", places[0].Country)
 	}
 }
 
-func TestLookupNotFound(t *testing.T) {
+func TestLookupAllNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	}))
@@ -191,13 +192,16 @@ func TestLookupNotFound(t *testing.T) {
 	c := newTestClient(srv)
 	c.Retries = 0
 
-	_, err := c.Lookup(context.Background(), "us", "00000")
+	_, err := c.LookupAll(context.Background(), "us", "00000")
 	if err == nil {
 		t.Error("expected error for 404, got nil")
 	}
+	if !strings.Contains(err.Error(), "no places found") {
+		t.Errorf("error %q should contain 'no places found'", err.Error())
+	}
 }
 
-func TestLookupInvalidJSON(t *testing.T) {
+func TestLookupAllInvalidJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("not json"))
 	}))
@@ -206,13 +210,13 @@ func TestLookupInvalidJSON(t *testing.T) {
 	c := newTestClient(srv)
 	c.Retries = 0
 
-	_, err := c.Lookup(context.Background(), "us", "90210")
+	_, err := c.LookupAll(context.Background(), "us", "90210")
 	if err == nil {
 		t.Error("expected error for invalid JSON, got nil")
 	}
 }
 
-func TestLookupMultiplePlaces(t *testing.T) {
+func TestLookupAllMultiplePlaces(t *testing.T) {
 	resp := map[string]interface{}{
 		"post code":            "10001",
 		"country":              "United States",
@@ -243,12 +247,24 @@ func TestLookupMultiplePlaces(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(srv)
-	z, err := c.Lookup(context.Background(), "us", "10001")
+	places, err := c.LookupAll(context.Background(), "us", "10001")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// should return first place
-	if z.PlaceName != "New York City" {
-		t.Errorf("PlaceName = %q, want New York City (first place)", z.PlaceName)
+	// both places emitted
+	if len(places) != 2 {
+		t.Fatalf("got %d places, want 2", len(places))
+	}
+	if places[0].PlaceName != "New York City" {
+		t.Errorf("places[0].PlaceName = %q, want New York City", places[0].PlaceName)
+	}
+	if places[1].PlaceName != "Manhattan" {
+		t.Errorf("places[1].PlaceName = %q, want Manhattan", places[1].PlaceName)
+	}
+	// both records carry the same PostCode
+	for i, p := range places {
+		if p.PostCode != "10001" {
+			t.Errorf("places[%d].PostCode = %q, want 10001", i, p.PostCode)
+		}
 	}
 }

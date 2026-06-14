@@ -10,8 +10,8 @@ import (
 // and the host wiring, which need no network. The client's HTTP behaviour is
 // covered in zippopotam_test.go.
 //
-// The URI authority for ZipCode records is "zipcode" (kit derives it from
-// strings.ToLower("ZipCode")). The id is the bare postal code from PostCode.
+// The URI authority for Place records is "place" (kit derives it from
+// strings.ToLower("Place")). The id is the bare postal code from PostCode.
 
 func TestDomainInfo(t *testing.T) {
 	info := Domain{}.Info()
@@ -39,14 +39,14 @@ func TestClassify(t *testing.T) {
 		id  string
 	}{
 		// bare postal code → default us
-		{"90210", "zipcode", "90210"},
+		{"90210", "place", "90210"},
 		// country-prefix form → strip prefix, bare code
-		{"us:90210", "zipcode", "90210"},
-		{"gb:ec1a", "zipcode", "ec1a"},
-		{"de:10115", "zipcode", "10115"},
+		{"us:90210", "place", "90210"},
+		{"gb:ec1a", "place", "ec1a"},
+		{"de:10115", "place", "10115"},
 		// full API URL → extract postal code from path
-		{"https://" + Host + "/us/90210", "zipcode", "90210"},
-		{"https://" + WebHost + "/gb/ec1a", "zipcode", "ec1a"},
+		{"https://" + Host + "/us/90210", "place", "90210"},
+		{"https://" + WebHost + "/gb/ec1a", "place", "ec1a"},
 	}
 	for _, tc := range cases {
 		typ, id, err := Domain{}.Classify(tc.in)
@@ -65,7 +65,7 @@ func TestClassifyEmpty(t *testing.T) {
 }
 
 func TestLocate(t *testing.T) {
-	got, err := Domain{}.Locate("zipcode", "90210")
+	got, err := Domain{}.Locate("place", "90210")
 	want := "https://" + WebHost + "/90210"
 	if err != nil || got != want {
 		t.Errorf("Locate = (%q, %v), want (%q, nil)", got, err, want)
@@ -80,7 +80,7 @@ func TestLocateUnknownType(t *testing.T) {
 }
 
 // TestHostWiring mounts the driver in a kit Host and checks the round trip:
-// a ZipCode record mints to its URI (zippopotam://zipcode/<postcode>), and a
+// a Place record mints to its URI (zippopotam://place/<postcode>), and a
 // bare postal code resolves to the same URI scheme.
 func TestHostWiring(t *testing.T) {
 	h, err := kit.Open()
@@ -88,21 +88,19 @@ func TestHostWiring(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	z := &ZipCode{
-		PostCode:    "90210",
-		Country:     "United States",
-		CountryCode: "US",
-		PlaceName:   "Beverly Hills",
-		State:       "California",
-		StateCode:   "CA",
-		Lat:         "34.0901",
-		Lon:         "-118.4065",
+	p := &Place{
+		PostCode:  "90210",
+		Country:   "United States",
+		PlaceName: "Beverly Hills",
+		State:     "California",
+		Latitude:  "34.0901",
+		Longitude: "-118.4065",
 	}
-	u, err := h.Mint(z)
+	u, err := h.Mint(p)
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
-	if want := "zippopotam://zipcode/90210"; u.String() != want {
+	if want := "zippopotam://place/90210"; u.String() != want {
 		t.Errorf("Mint = %q, want %q", u.String(), want)
 	}
 
@@ -110,7 +108,7 @@ func TestHostWiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveOn: %v", err)
 	}
-	if want := "zippopotam://zipcode/90210"; got.String() != want {
+	if want := "zippopotam://place/90210"; got.String() != want {
 		t.Errorf("ResolveOn = %q, want %q", got.String(), want)
 	}
 }

@@ -45,17 +45,20 @@ key, nothing to run alongside it.`,
 }
 
 // Register installs the client factory and every operation onto app.
-// The op emits *ZipCode, so kit derives the URI authority as "zipcode"
-// (strings.ToLower("ZipCode")).
+// The op emits *Place; one record is emitted per matching place so that a
+// postal code that spans multiple towns produces multiple output rows.
 func (Domain) Register(app *kit.App) {
 	app.SetClient(newClient)
 
 	kit.Handle(app, kit.OpMeta{
 		Name:    "lookup",
 		Group:   "read",
-		Single:  true,
-		Summary: "Look up a postal code",
-		Args:    []kit.Arg{{Name: "postalcode", Help: "postal/zip code"}},
+		Single:  false,
+		Summary: "Look up places by country and postal code",
+		Args: []kit.Arg{
+			{Name: "country", Help: "2-letter country code (us, gb, de, fr, …)"},
+			{Name: "postcode", Help: "postal/zip code (e.g. 90210)"},
+		},
 	}, lookupOp)
 }
 
@@ -81,27 +84,32 @@ func newClient(_ context.Context, cfg kit.Config) (any, error) {
 // --- inputs ---
 
 type lookupInput struct {
-	PostalCode string  `kit:"arg" help:"postal/zip code"`
-	Country    string  `kit:"flag" help:"country code (us, gb, de, fr, etc.)" default:"us"`
-	Client     *Client `kit:"inject"`
+	Country  string  `kit:"arg" help:"2-letter country code (us, gb, de, fr, …)"`
+	Postcode string  `kit:"arg" help:"postal/zip code (e.g. 90210)"`
+	Client   *Client `kit:"inject"`
 }
 
 // --- handlers ---
 
-func lookupOp(ctx context.Context, in lookupInput, emit func(*ZipCode) error) error {
-	z, err := in.Client.Lookup(ctx, in.Country, in.PostalCode)
+func lookupOp(ctx context.Context, in lookupInput, emit func(*Place) error) error {
+	places, err := in.Client.LookupAll(ctx, in.Country, in.Postcode)
 	if err != nil {
 		return mapErr(err)
 	}
-	return emit(z)
+	for _, p := range places {
+		if err := emit(p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // --- Resolver: the URI-native string functions, pure and network-free ---
 
 // Classify turns an accepted input — a bare postal code, an optional
 // "CC:postalcode" prefix form, or a full zippopotam URL — into (uriType, id).
-// The URI authority for ZipCode records is "zipcode" (kit derives it from the
-// struct name). The id is the bare postal code stored in ZipCode.PostCode.
+// The URI authority for Place records is "place" (kit derives it from the
+// struct name). The id is the bare postal code stored in Place.PostCode.
 func (Domain) Classify(input string) (uriType, id string, err error) {
 	input = strings.TrimSpace(input)
 	if input == "" {
@@ -119,10 +127,10 @@ func (Domain) Classify(input string) (uriType, id string, err error) {
 					if path != "" {
 						parts := strings.SplitN(path, "/", 2)
 						if len(parts) == 2 && parts[1] != "" {
-							return "zipcode", parts[1], nil
+							return "place", parts[1], nil
 						}
 						// bare path with no slash — treat as postal code
-						return "zipcode", path, nil
+						return "place", path, nil
 					}
 				}
 			}
@@ -134,19 +142,19 @@ func (Domain) Classify(input string) (uriType, id string, err error) {
 	if idx := strings.Index(input, ":"); idx == 2 {
 		code := strings.TrimSpace(input[idx+1:])
 		if code != "" {
-			return "zipcode", code, nil
+			return "place", code, nil
 		}
 	}
 
 	// bare postalcode
-	return "zipcode", input, nil
+	return "place", input, nil
 }
 
 // Locate is the inverse: the live https URL for a (uriType, id).
 // id is the bare postal code. We link to the www homepage since the API
 // doesn't have a human-readable page per code.
 func (Domain) Locate(uriType, id string) (string, error) {
-	if uriType != "zipcode" {
+	if uriType != "place" {
 		return "", errs.Usage("zippopotam has no resource type %q", uriType)
 	}
 	return "https://" + WebHost + "/" + strings.Trim(id, "/"), nil

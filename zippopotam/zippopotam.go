@@ -51,16 +51,15 @@ func NewClient() *Client {
 	}
 }
 
-// ZipCode is the output record for a postal code lookup.
-type ZipCode struct {
-	PostCode    string `kit:"id" json:"post_code"`
-	Country     string `json:"country"`
-	CountryCode string `json:"country_code"`
-	PlaceName   string `json:"place_name"`
-	State       string `json:"state"`
-	StateCode   string `json:"state_code"`
-	Lat         string `json:"lat"`
-	Lon         string `json:"lon"`
+// Place is the output record for a postal code lookup. One record is emitted
+// per place returned by the API; a single postal code can match many places.
+type Place struct {
+	PostCode  string `kit:"id" json:"postcode"`
+	PlaceName string `json:"place_name"`
+	State     string `json:"state"`
+	Country   string `json:"country"`
+	Latitude  string `json:"latitude"`
+	Longitude string `json:"longitude"`
 }
 
 // wire types for decoding the API response (field names have spaces).
@@ -80,9 +79,10 @@ type wirePlace struct {
 	Latitude  string `json:"latitude"`
 }
 
-// Lookup fetches a postal code from the given country and returns the first
-// matching place as a ZipCode record. country defaults to "us" when empty.
-func (c *Client) Lookup(ctx context.Context, country, postalCode string) (*ZipCode, error) {
+// LookupAll fetches a postal code from the given country and returns one Place
+// record per matching place. country defaults to "us" when empty. A 404 from
+// the API is returned as an explicit "no places found" error.
+func (c *Client) LookupAll(ctx context.Context, country, postalCode string) ([]*Place, error) {
 	if country == "" {
 		country = "us"
 	}
@@ -92,7 +92,7 @@ func (c *Client) Lookup(ctx context.Context, country, postalCode string) (*ZipCo
 	url := BaseURL + "/" + country + "/" + postalCode
 	body, err := c.Get(ctx, url)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("no places found for %s/%s", country, postalCode)
 	}
 
 	var w wireZip
@@ -102,17 +102,19 @@ func (c *Client) Lookup(ctx context.Context, country, postalCode string) (*ZipCo
 	if len(w.Places) == 0 {
 		return nil, fmt.Errorf("no places found for %s/%s", country, postalCode)
 	}
-	p := w.Places[0]
-	return &ZipCode{
-		PostCode:    w.PostCode,
-		Country:     w.Country,
-		CountryCode: w.CountryAbbr,
-		PlaceName:   p.PlaceName,
-		State:       p.State,
-		StateCode:   p.StateAbbr,
-		Lat:         p.Latitude,
-		Lon:         p.Longitude,
-	}, nil
+
+	places := make([]*Place, 0, len(w.Places))
+	for _, p := range w.Places {
+		places = append(places, &Place{
+			PostCode:  w.PostCode,
+			PlaceName: p.PlaceName,
+			State:     p.State,
+			Country:   w.Country,
+			Latitude:  p.Latitude,
+			Longitude: p.Longitude,
+		})
+	}
+	return places, nil
 }
 
 // Get fetches url and returns the response body. It paces and retries according
