@@ -149,8 +149,14 @@ func TestLookupAll(t *testing.T) {
 	if p.Country != "United States" {
 		t.Errorf("Country = %q, want United States", p.Country)
 	}
+	if p.CountryAbb != "US" {
+		t.Errorf("CountryAbb = %q, want US", p.CountryAbb)
+	}
 	if p.State != "California" {
 		t.Errorf("State = %q, want California", p.State)
+	}
+	if p.StateAbb != "CA" {
+		t.Errorf("StateAbb = %q, want CA", p.StateAbb)
 	}
 	if p.Latitude != "34.0901" {
 		t.Errorf("Latitude = %q, want 34.0901", p.Latitude)
