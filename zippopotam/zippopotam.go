@@ -54,12 +54,14 @@ func NewClient() *Client {
 // Place is the output record for a postal code lookup. One record is emitted
 // per place returned by the API; a single postal code can match many places.
 type Place struct {
-	PostCode  string `kit:"id" json:"postcode"`
-	PlaceName string `json:"place_name"`
-	State     string `json:"state"`
-	Country   string `json:"country"`
-	Latitude  string `json:"latitude"`
-	Longitude string `json:"longitude"`
+	PostCode   string `kit:"id" json:"post_code"`
+	Country    string `json:"country"`
+	CountryAbb string `json:"country_abbreviation"`
+	PlaceName  string `json:"place_name"`
+	State      string `json:"state"`
+	StateAbb   string `json:"state_abbreviation"`
+	Latitude   string `json:"latitude"`
+	Longitude  string `json:"longitude"`
 }
 
 // wire types for decoding the API response (field names have spaces).
@@ -106,12 +108,14 @@ func (c *Client) LookupAll(ctx context.Context, country, postalCode string) ([]*
 	places := make([]*Place, 0, len(w.Places))
 	for _, p := range w.Places {
 		places = append(places, &Place{
-			PostCode:  w.PostCode,
-			PlaceName: p.PlaceName,
-			State:     p.State,
-			Country:   w.Country,
-			Latitude:  p.Latitude,
-			Longitude: p.Longitude,
+			PostCode:   w.PostCode,
+			Country:    w.Country,
+			CountryAbb: w.CountryAbbr,
+			PlaceName:  p.PlaceName,
+			State:      p.State,
+			StateAbb:   p.StateAbbr,
+			Latitude:   p.Latitude,
+			Longitude:  p.Longitude,
 		})
 	}
 	return places, nil
